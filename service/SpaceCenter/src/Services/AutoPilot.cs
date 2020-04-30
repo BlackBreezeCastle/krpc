@@ -233,6 +233,22 @@ namespace KRPC.SpaceCenter.Services
             attitudeController.TargetHeading = heading;
         }
 
+        private double Speed
+        {
+            get
+            {
+                return ReferenceFrame.VelocityFromWorldSpace(InternalVessel.CoM,
+                InternalVessel.GetOrbit().GetVel()).magnitude;
+            }
+        }
+
+        [KRPCProperty]
+        public double ShutdownSpeed
+        {
+            get;
+            set;
+        } =3e8f;
+
         /// <summary>
         /// Direction vector corresponding to the target pitch and heading.
         /// This is in the reference frame specified by <see cref="ReferenceFrame"/>.
@@ -513,6 +529,12 @@ namespace KRPC.SpaceCenter.Services
                 autoPilot.attitudeController.TargetRoll = double.NaN;
                 autoPilot.Disengage ();
                 return false;
+            }
+
+            //auto shutdown engine
+            if (autoPilot.Speed > autoPilot.ShutdownSpeed)
+            {
+                state.Throttle = 0.0f;
             }
             // Run the auto-pilot
             autoPilot.SAS = false;
