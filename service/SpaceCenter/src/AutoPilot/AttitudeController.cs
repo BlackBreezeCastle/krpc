@@ -34,7 +34,7 @@ namespace KRPC.SpaceCenter.AutoPilot
         Vector3d timeToPeak;
         Vector3d twiceZetaOmega = Vector3d.zero;
         Vector3d omegaSquared = Vector3d.zero;
-
+        QuaternionD directionBiasQuaternion= QuaternionD.identity;
         [SuppressMessage ("Gendarme.Rules.Maintainability", "VariableNamesShouldNotMatchFieldNamesRule")]
         public AttitudeController (Vessel vessel)
         {
@@ -43,10 +43,11 @@ namespace KRPC.SpaceCenter.AutoPilot
             StoppingTime = new Vector3d (0.5, 0.5, 0.5);
             DecelerationTime = new Vector3d (5, 5, 5);
             AttenuationAngle = new Vector3d (1, 1, 1);
-            RollThreshold = 5;
+            RollThreshold = 360;
             AutoTune = true;
             Overshoot = new Vector3d (0.01, 0.01, 0.01);
             TimeToPeak = new Vector3d (3, 3, 3);
+            PlaneMode = false;
             Start ();
         }
 
@@ -77,8 +78,29 @@ namespace KRPC.SpaceCenter.AutoPilot
             }
         }
 
+        public Vector3d DirectionBias {
+            set
+            {
+                var phr = value;
+                directionBiasQuaternion=GeometryExtensions.QuaternionFromPitchHeadingRoll(phr);
+            }
+            get { return directionBiasQuaternion.PitchHeadingRoll();}
+        }
+
+        public bool PlaneMode { get; set; }
+
         public Vector3d TargetDirection {
             get { return targetDirection; }
+            set
+            {
+                // FIXME: QuaternionD.FromToRotation method not available at runtime
+                var direction = ReferenceFrame.Rotation* value;
+                direction = vessel.SurfaceReferenceFrame.Rotation.Inverse() * direction;
+                var rotation = (QuaternionD)Quaternion.FromToRotation(Vector3d.up, direction);
+                var phr = rotation.PitchHeadingRoll();
+                TargetPitch = phr.x;
+                TargetHeading = phr.y;
+            }
         }
 
         public QuaternionD TargetRotation {
@@ -154,7 +176,7 @@ namespace KRPC.SpaceCenter.AutoPilot
             var current = ComputeCurrentAngularVelocity ();
             // If roll not set, or not close to target direction, set roll target velocity to 0
             var currentDirection = ReferenceFrame.DirectionFromWorldSpace (internalVessel.ReferenceTransform.up);
-            if (double.IsNaN (TargetRoll) || Vector3.Angle (currentDirection, targetDirection) > RollThreshold)
+            if (double.IsNaN (TargetRoll))
                 target.y = 0;
 
             // Autotune the controllers if enabled
@@ -173,6 +195,7 @@ namespace KRPC.SpaceCenter.AutoPilot
                              PitchPID.Update (target.x, current.x, deltaTime),
                              RollPID.Update (target.y, current.y, deltaTime),
                              YawPID.Update (target.z, current.z, deltaTime));
+
             state.Pitch = (float)output.x;
             state.Roll = (float)output.y;
             state.Yaw = (float)output.z;
@@ -187,20 +210,68 @@ namespace KRPC.SpaceCenter.AutoPilot
         {
             var worldAngularVelocity = vessel.InternalVessel.GetComponent<Rigidbody> ().angularVelocity;
             var localAngularVelocity = ReferenceFrame.AngularVelocityFromWorldSpace (worldAngularVelocity);
+            
             // TODO: why does this need to be negative?
-            return -vessel.ReferenceFrame.DirectionFromWorldSpace (ReferenceFrame.DirectionToWorldSpace (localAngularVelocity));
+            var ret=-vessel.ReferenceFrame.DirectionFromWorldSpace (ReferenceFrame.DirectionToWorldSpace (localAngularVelocity));
+            if (PlaneMode)
+            {
+                ret=ret-TurnAngularVelocity();
+            }
+            return ret;
         }
 
+        Vector3 TurnAngularVelocity()
+        {
+            var InternalVessel = vessel.InternalVessel;
+            var va = InternalVessel.acceleration;
+            var v = InternalVessel.srf_velocity;
+            if (va.magnitude<=0||v.magnitude<=0)
+            {
+                return Vector3d.zero;
+            }
+            //Debug.Log("va:" + va + "v:" + v);
+            va = va - Vector3.Dot(va, v.normalized) * v.normalized;
+            var a_mag = va.magnitude / v.magnitude;
+            var res = Vector3.Cross(va, v).normalized *(float)a_mag;
+            res= vessel.ReferenceFrame.Rotation.Inverse() * res;
+            Debug.Log("res"+res+"mag"+res.magnitude);
+            return res;
+        }
         /// <summary>
         /// Compute target angular velocity in pitch,roll,yaw axes
         /// </summary>
         Vector3 ComputeTargetAngularVelocity(Vector3d torque, Vector3d moi)
         {
+            var angles = new Vector3d(0, 0, 0);
             var internalVessel = vessel.InternalVessel;
             var currentRotation = ReferenceFrame.RotationFromWorldSpace(internalVessel.ReferenceTransform.rotation);
-            var currentDirection = ReferenceFrame.DirectionFromWorldSpace(internalVessel.ReferenceTransform.up);
+            var tmpTargetRotation = TargetRotation;
+            var tmpTargetDirection = TargetDirection;
 
-            QuaternionD rotation = Quaternion.FromToRotation(currentDirection, targetDirection);
+            currentRotation = directionBiasQuaternion * currentRotation;
+            var currentDirection = currentRotation * Vector3d.up;
+
+            if (PlaneMode)
+            {
+                var tmpdirection = internalVessel.GetSrfVelocity();
+                if (tmpdirection.magnitude<=0)
+                {
+                    tmpdirection = ReferenceFrame.Rotation * currentDirection;
+                }
+                tmpdirection = vessel.SurfaceReferenceFrame.Rotation.Inverse() * tmpdirection;
+                var sq =  GeometryExtensions.ToQuaternion(tmpdirection.normalized, TargetRoll);
+                sq = ReferenceFrame.Rotation.Inverse() * vessel.SurfaceReferenceFrame.Rotation * sq;
+                var right = sq * Vector3d.right;
+                var forward = sq * Vector3d.forward;
+                var tmpq = QuaternionD.AngleAxis(-(float)TargetPitch,right);
+                tmpTargetRotation = tmpq * sq;
+                tmpq= QuaternionD.AngleAxis(-(float)TargetHeading, forward);
+                tmpTargetRotation = tmpq * tmpTargetRotation;
+                tmpTargetDirection = tmpTargetRotation*Vector3d.up;
+            }
+
+
+            QuaternionD rotation = Quaternion.FromToRotation(currentDirection, tmpTargetDirection);
             // Compute angles for the rotation in pitch (x), roll (y), yaw (z) axes
             float angleFloat;
             Vector3 axisFloat;
@@ -208,11 +279,11 @@ namespace KRPC.SpaceCenter.AutoPilot
             ((Quaternion)rotation).ToAngleAxis(out angleFloat, out axisFloat);
             double angle = GeometryExtensions.ClampAngle180(angleFloat);
             Vector3d axis = axisFloat;
-            var angles = axis * angle;
+            angles = angles + axis * angle;
             if (!double.IsNaN(TargetRoll))
-            { 
+            {
                 // Roll angle set => use rotation from currentRotation -> targetRotation
-                rotation =  rotation.Inverse()* targetRotation;
+                rotation = rotation.Inverse() * tmpTargetRotation;
                 rotation = rotation*currentRotation.Inverse();
                 ((Quaternion)rotation).ToAngleAxis(out angleFloat, out axisFloat);
                 if (!float.IsInfinity(axisFloat.magnitude))
@@ -224,6 +295,7 @@ namespace KRPC.SpaceCenter.AutoPilot
             }
             // else Roll angle not set => use rotation from currentDirection -> targetDirection
             // FIXME: QuaternionD.FromToRotation method not available at runtime
+            angles = directionBiasQuaternion * angles;
             angles = vessel.ReferenceFrame.DirectionFromWorldSpace(ReferenceFrame.DirectionToWorldSpace(angles));
             return AnglesToAngularVelocity (angles, torque, moi);
         }
