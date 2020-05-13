@@ -22,6 +22,7 @@ namespace KRPC.SpaceCenter.Services
     /// the auto-pilot will be disengaged and its target reference frame, direction and roll
     /// reset to default.
     /// </remarks>
+    /// 
     [KRPCClass (Service = "SpaceCenter", GameScene = GameScene.Flight)]
     [SuppressMessage ("Gendarme.Rules.Maintainability", "AvoidLackOfCohesionOfMethodsRule")]
     public class AutoPilot : Equatable<AutoPilot>
@@ -256,13 +257,7 @@ namespace KRPC.SpaceCenter.Services
         [KRPCProperty]
         public Tuple3 TargetDirection {
             get { return attitudeController.TargetDirection.ToTuple (); }
-            set {
-                // FIXME: QuaternionD.FromToRotation method not available at runtime
-                var rotation = (QuaternionD)Quaternion.FromToRotation (Vector3d.up, value.ToVector ());
-                var phr = rotation.PitchHeadingRoll ();
-                attitudeController.TargetPitch = phr.x;
-                attitudeController.TargetHeading = phr.y;
-            }
+            set { attitudeController.TargetDirection = value.ToVector(); }
         }
 
         /// <summary>
@@ -313,6 +308,19 @@ namespace KRPC.SpaceCenter.Services
             set { attitudeController.StoppingTime = value.ToVector (); }
         }
 
+        [KRPCProperty]
+        public Tuple3 DirectionBias
+        {
+            get { return attitudeController.DirectionBias.ToTuple(); }
+            set { attitudeController.DirectionBias = value.ToVector(); }
+        }
+
+        [KRPCProperty]
+        public bool PlaneMode
+        {
+            get { return attitudeController.PlaneMode; }
+            set { attitudeController.PlaneMode = value; }
+        }
         /// <summary>
         /// The time the vessel should take to come to a stop pointing in the target direction.
         /// This determines the angular acceleration used to decelerate the vessel.
