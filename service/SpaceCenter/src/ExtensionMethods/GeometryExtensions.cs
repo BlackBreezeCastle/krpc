@@ -6,8 +6,6 @@ using UnityEngine;
 using Tuple2 = KRPC.Utils.Tuple<double, double>;
 using Tuple3 = KRPC.Utils.Tuple<double, double, double>;
 using Tuple4 = KRPC.Utils.Tuple<double, double, double, double>;
-using TupleV3 = KRPC.Utils.Tuple<Vector3d, Vector3d>;
-using TupleT3 = KRPC.Utils.Tuple<KRPC.Utils.Tuple<double, double, double>, KRPC.Utils.Tuple<double, double, double>>;
 
 namespace KRPC.SpaceCenter.ExtensionMethods
 {
@@ -80,6 +78,14 @@ namespace KRPC.SpaceCenter.ExtensionMethods
             return new QuaternionD (t.Item1, t.Item2, t.Item3, t.Item4);
         }
 
+        public static QuaternionD ToQuaternion(Vector3 direction,double roll)
+        {
+            var rotation = (QuaternionD)Quaternion.FromToRotation(Vector3d.up, direction);
+            var phr = rotation.PitchHeadingRoll();
+            phr.z = double.IsNaN(roll) ? 0 : roll;
+            return QuaternionFromPitchHeadingRoll(phr);
+        }
+
         /// <summary>
         /// Convert a Matrix4x4 (simulating a Matrix3x3) to a tuple of tuples
         /// </summary>
@@ -96,9 +102,9 @@ namespace KRPC.SpaceCenter.ExtensionMethods
         /// Convert a pair of vectors to a pair of tuples
         /// </summary>
         [SuppressMessage ("Gendarme.Rules.Design.Generic", "DoNotExposeNestedGenericSignaturesRule")]
-        public static TupleT3 ToTuple (this TupleV3 v)
+        public static Tuple<Tuple3, Tuple3> ToTuple (this Tuple<Vector3d, Vector3d> v)
         {
-            return new TupleT3 (v.Item1.ToTuple (), v.Item2.ToTuple ());
+            return new Tuple<Tuple3,Tuple3> (v.Item1.ToTuple (), v.Item2.ToTuple ());
         }
 
         /// <summary>
@@ -430,9 +436,9 @@ namespace KRPC.SpaceCenter.ExtensionMethods
         /// Convert an axis-aligned bounding box to its min and max positions as tuples.
         /// </summary>
         [SuppressMessage ("Gendarme.Rules.Design.Generic", "DoNotExposeNestedGenericSignaturesRule")]
-        public static TupleT3 ToTuples (this Bounds bounds)
+        public static Tuple<Tuple3,Tuple3> ToTuples (this Bounds bounds)
         {
-            return new TupleT3 (bounds.min.ToTuple (), bounds.max.ToTuple ());
+            return new Tuple<Tuple3, Tuple3> (bounds.min.ToTuple (), bounds.max.ToTuple ());
         }
     }
 }
