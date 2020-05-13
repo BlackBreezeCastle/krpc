@@ -229,12 +229,10 @@ namespace KRPC.SpaceCenter.AutoPilot
             {
                 return Vector3d.zero;
             }
-            //Debug.Log("va:" + va + "v:" + v);
             va = va - Vector3.Dot(va, v.normalized) * v.normalized;
             var a_mag = va.magnitude / v.magnitude;
             var res = Vector3.Cross(va, v).normalized *(float)a_mag;
             res= vessel.ReferenceFrame.Rotation.Inverse() * res;
-            Debug.Log("res"+res+"mag"+res.magnitude);
             return res;
         }
         /// <summary>
