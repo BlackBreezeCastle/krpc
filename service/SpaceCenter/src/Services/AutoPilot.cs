@@ -29,7 +29,11 @@ namespace KRPC.SpaceCenter.Services
     {
         static readonly IDictionary<Guid, AutoPilot> engaged = new Dictionary<Guid, AutoPilot> ();
         readonly Guid vesselId;
+        readonly Services.Vessel vessel;
         readonly AttitudeController attitudeController;
+        readonly PIDController throttleController;
+        double maxAcc;
+        double throttleParameter;
         IClient requestingClient;
 
         internal AutoPilot (global::Vessel vessel)
@@ -38,6 +42,11 @@ namespace KRPC.SpaceCenter.Services
                 engaged [vessel.id] = null;
             vesselId = vessel.id;
             attitudeController = new AttitudeController (vessel);
+            this.vessel = new Services.Vessel(vessel);
+            throttleController = new PIDController(0);
+            maxAcc=-1;
+            throttleParameter=0.5;
+            throttleController.SetParameters(0, throttleParameter, 0);
         }
 
         /// <summary>
@@ -234,6 +243,33 @@ namespace KRPC.SpaceCenter.Services
             attitudeController.TargetHeading = heading;
         }
 
+        [KRPCMethod]
+        public void TorqueMat(bool auto=true,
+            float m00 = 0.0f, float m01 = 0.0f, float m02 = 0.0f,
+            float m10 = 0.0f, float m11 = 0.0f, float m12 = 0.0f,
+            float m20 = 0.0f, float m21 = 0.0f, float m22 = 0.0f)
+        {
+            attitudeController.AutoTorqueMat = auto;
+            Matrix4x4 mat=Matrix4x4.identity;
+            mat[0] = m00;
+            mat[1] = m10;
+            mat[2] = m20;
+            mat[4] = m01;
+            mat[5] = m11;
+            mat[6] = m21;
+            mat[8] = m02;
+            mat[9] = m12;
+            mat[10] = m22;
+            attitudeController.TorqueMat = mat;
+        }
+
+        [KRPCMethod]
+        public void MaxAcceleration(float _maxAcc=-1,double _throttleParameter=0.5)
+        {
+            maxAcc = _maxAcc;
+            throttleController.SetParameters(0, _throttleParameter, 0);
+        }
+
         private double Speed
         {
             get
@@ -311,7 +347,7 @@ namespace KRPC.SpaceCenter.Services
         [KRPCProperty]
         public Tuple3 DirectionBias
         {
-            get { return attitudeController.DirectionBias.ToTuple(); }
+            //get { return attitudeController.DirectionBias.ToTuple(); }
             set { attitudeController.DirectionBias = value.ToVector(); }
         }
 
@@ -543,6 +579,19 @@ namespace KRPC.SpaceCenter.Services
             if (autoPilot.Speed > autoPilot.ShutdownSpeed)
             {
                 state.Throttle = 0.0f;
+            }
+            else
+            {
+                if (autoPilot.maxAcc>=0)
+                {
+                    double deltaTime = Time.fixedDeltaTime;
+                    if (deltaTime > 0.01)
+                    {
+                        double acc = autoPilot.vessel.Thrust / autoPilot.vessel.Mass;
+                        float throttle = 1.0f + (float)autoPilot.throttleController.Update(autoPilot.maxAcc, acc, deltaTime);
+                        state.Throttle = throttle.Clamp(0.01f, 1.0f);
+                    }
+                }
             }
             // Run the auto-pilot
             autoPilot.SAS = false;
