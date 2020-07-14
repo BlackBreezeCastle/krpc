@@ -34,7 +34,7 @@ namespace KRPC.SpaceCenter.AutoPilot
         Vector3d timeToPeak;
         Vector3d twiceZetaOmega = Vector3d.zero;
         Vector3d omegaSquared = Vector3d.zero;
-        QuaternionD directionBiasQuaternion= QuaternionD.identity;
+        Matrix4x4 transitionMat = Matrix4x4.identity;
         [SuppressMessage ("Gendarme.Rules.Maintainability", "VariableNamesShouldNotMatchFieldNamesRule")]
         public AttitudeController (Vessel vessel)
         {
@@ -48,6 +48,8 @@ namespace KRPC.SpaceCenter.AutoPilot
             Overshoot = new Vector3d (0.01, 0.01, 0.01);
             TimeToPeak = new Vector3d (3, 3, 3);
             PlaneMode = false;
+            AutoTorqueMat = true;
+            DirectionBias= new Vector3d(0.0, 0.0, 0.0);
             Start ();
         }
 
@@ -78,14 +80,7 @@ namespace KRPC.SpaceCenter.AutoPilot
             }
         }
 
-        public Vector3d DirectionBias {
-            set
-            {
-                var phr = value;
-                directionBiasQuaternion=GeometryExtensions.QuaternionFromPitchHeadingRoll(phr);
-            }
-            get { return directionBiasQuaternion.PitchHeadingRoll();}
-        }
+        public Vector3d DirectionBias { get; set; }
 
         public bool PlaneMode { get; set; }
 
@@ -123,6 +118,10 @@ namespace KRPC.SpaceCenter.AutoPilot
         public Vector3d AttenuationAngle { get; set; }
 
         public double RollThreshold { get; set; }
+
+        public Matrix4x4 TorqueMat { get; set; }
+
+        public bool AutoTorqueMat { set; get; }
 
         public bool AutoTune { get; set; }
 
@@ -170,7 +169,44 @@ namespace KRPC.SpaceCenter.AutoPilot
             var internalVessel = vessel.InternalVessel;
             var torque = vessel.AvailableTorqueVectors.Item1;
             var moi = vessel.MomentOfInertiaVector;
+            transitionMat = Matrix4x4.identity;
+            if (!AutoTorqueMat)
+            {
+                var ine = vessel.InertiaTensor;
+                Matrix4x4 InertialTensor = Matrix4x4.identity;
+                for (int i = 0; i < 3; i++)
+                    for (int j = 0; j < 3; j++)
+                        InertialTensor[i + j*4] = (float)ine[i * 3 + j];
+                //Debug.Log("InertialTensor\n" + InertialTensor);
+                Matrix4x4 mat = TorqueMat;
+                //Debug.Log("torqueMat\n" + mat);
+                /*
+                mat[0] = (float)torque.x;
+                mat[5] = (float)torque.y;
+                mat[10] = (float)torque.z;
+                */
 
+                Matrix4x4 w=InertialTensor.inverse * mat;
+                Func<float, float, float,float> lambda = (a1,a2,a3) => { return (float)Math.Pow((double)a1*a1+a2*a2+a3*a3,0.5); };
+                var wx = lambda(w[0], w[1], w[2]);
+                var wy = lambda(w[4], w[5], w[6]);
+                var wz = lambda(w[8], w[9], w[10]);
+                //Debug.Log("x:"+wx+" y:"+wy+" z:"+wz);
+                mat[0] = w[0] / wx;
+                mat[1] = w[1] / wx;
+                mat[2] = w[2] / wx;
+                mat[4] = w[4] / wy;
+                mat[5] = w[5] / wy;
+                mat[6] = w[6] / wy;
+                mat[8] = w[8] / wz;
+                mat[9] = w[9] / wz;
+                mat[10] = w[10] / wz;
+                transitionMat = mat.inverse;
+                //Debug.Log("transitionMat\n" + transitionMat);
+                torque = new Vector3d(wx, wy, wz);
+                moi = new Vector3d(1.0f, 1.0f, 1.0f);
+            }
+           
             // Compute the input and error for the controllers
             var target = ComputeTargetAngularVelocity (torque, moi);
             var current = ComputeCurrentAngularVelocity ();
@@ -215,8 +251,16 @@ namespace KRPC.SpaceCenter.AutoPilot
             var ret=-vessel.ReferenceFrame.DirectionFromWorldSpace (ReferenceFrame.DirectionToWorldSpace (localAngularVelocity));
             if (PlaneMode)
             {
-                ret=ret-TurnAngularVelocity();
+                var tav = TurnAngularVelocity();
+                if (vessel.InternalVessel.GetSrfVelocity().magnitude < 1200)
+                {
+                    var up = new Vector3d(1, 0, 0);
+                    up = vessel.ReferenceFrame.Rotation.Inverse()*vessel.SurfaceReferenceFrame.Rotation * up;
+                    tav = Vector3d.Dot(up, tav)*up;
+                }
+                ret = ret - tav;
             }
+            ret = transitionMat.MultiplyVector(ret);
             return ret;
         }
 
@@ -240,11 +284,19 @@ namespace KRPC.SpaceCenter.AutoPilot
         /// </summary>
         Vector3 ComputeTargetAngularVelocity(Vector3d torque, Vector3d moi)
         {
-            var angles = new Vector3d(0, 0, 0);
             var internalVessel = vessel.InternalVessel;
             var currentRotation = ReferenceFrame.RotationFromWorldSpace(internalVessel.ReferenceTransform.rotation);
             var tmpTargetRotation = TargetRotation;
             var tmpTargetDirection = TargetDirection;
+
+            var phr = DirectionBias;
+            var right = currentRotation * Vector3d.right;
+            var forward = currentRotation * Vector3d.forward;
+            var up = currentRotation * Vector3d.up;
+            var q = QuaternionD.AngleAxis(phr.x, right);
+            q = q * QuaternionD.AngleAxis(phr.y, forward);
+            q = q * QuaternionD.AngleAxis(phr.z, up);
+            QuaternionD directionBiasQuaternion = q;
 
             currentRotation = directionBiasQuaternion * currentRotation;
             var currentDirection = currentRotation * Vector3d.up;
@@ -259,8 +311,8 @@ namespace KRPC.SpaceCenter.AutoPilot
                 tmpdirection = vessel.SurfaceReferenceFrame.Rotation.Inverse() * tmpdirection;
                 var sq =  GeometryExtensions.ToQuaternion(tmpdirection.normalized, TargetRoll);
                 sq = ReferenceFrame.Rotation.Inverse() * vessel.SurfaceReferenceFrame.Rotation * sq;
-                var right = sq * Vector3d.right;
-                var forward = sq * Vector3d.forward;
+                right = sq * Vector3d.right;
+                forward = sq * Vector3d.forward;
                 var tmpq = QuaternionD.AngleAxis(-(float)TargetPitch,right);
                 tmpTargetRotation = tmpq * sq;
                 tmpq= QuaternionD.AngleAxis(-(float)TargetHeading, forward);
@@ -277,6 +329,7 @@ namespace KRPC.SpaceCenter.AutoPilot
             ((Quaternion)rotation).ToAngleAxis(out angleFloat, out axisFloat);
             double angle = GeometryExtensions.ClampAngle180(angleFloat);
             Vector3d axis = axisFloat;
+            var angles = new Vector3d(0, 0, 0);
             angles = angles + axis * angle;
             if (!double.IsNaN(TargetRoll))
             {
@@ -295,6 +348,7 @@ namespace KRPC.SpaceCenter.AutoPilot
             // FIXME: QuaternionD.FromToRotation method not available at runtime
             angles = directionBiasQuaternion * angles;
             angles = vessel.ReferenceFrame.DirectionFromWorldSpace(ReferenceFrame.DirectionToWorldSpace(angles));
+            angles = transitionMat.MultiplyVector(angles);
             return AnglesToAngularVelocity (angles, torque, moi);
         }
 
