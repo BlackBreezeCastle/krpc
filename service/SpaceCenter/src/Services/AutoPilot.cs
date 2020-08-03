@@ -46,7 +46,7 @@ namespace KRPC.SpaceCenter.Services
             throttleController = new PIDController(0);
             maxAcc=-1;
             throttleParameter=0.5;
-            throttleController.SetParameters(0, throttleParameter, 0);
+            throttleController.SetParameters(0, throttleParameter, 0,-1.0d,0.0d);
         }
 
         /// <summary>
@@ -267,7 +267,7 @@ namespace KRPC.SpaceCenter.Services
         public void MaxAcceleration(float _maxAcc=-1,double _throttleParameter=0.5)
         {
             maxAcc = _maxAcc;
-            throttleController.SetParameters(0, _throttleParameter, 0);
+            throttleController.SetParameters(0, throttleParameter, 0, -1.0d, 0.0d);
         }
 
         private double Speed
@@ -578,21 +578,22 @@ namespace KRPC.SpaceCenter.Services
             //auto shutdown engine
             if (autoPilot.Speed > autoPilot.ShutdownSpeed)
             {
+                autoPilot.vessel.Control.Throttle = 0.0f;
                 state.Throttle = 0.0f;
+                autoPilot.maxAcc = -1.0d;
             }
-            else
+
+            if (autoPilot.maxAcc>=0)
             {
-                if (autoPilot.maxAcc>=0)
+                double deltaTime = Time.fixedDeltaTime;
+                if (deltaTime > 0.01)
                 {
-                    double deltaTime = Time.fixedDeltaTime;
-                    if (deltaTime > 0.01)
-                    {
-                        double acc = autoPilot.vessel.Thrust / autoPilot.vessel.Mass;
-                        float throttle = 1.0f + (float)autoPilot.throttleController.Update(autoPilot.maxAcc, acc, deltaTime);
-                        state.Throttle = throttle.Clamp(0.01f, 1.0f);
-                    }
+                    double acc = autoPilot.vessel.Thrust / autoPilot.vessel.Mass;
+                    float throttle = 1.0f + (float)autoPilot.throttleController.Update(autoPilot.maxAcc, acc, deltaTime);
+                    state.Throttle = throttle.Clamp(0.01f, 1.0f);
                 }
             }
+            
             // Run the auto-pilot
             autoPilot.SAS = false;
             autoPilot.attitudeController.Update (state);
